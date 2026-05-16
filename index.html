@@ -1,257 +1,401 @@
-import React, { useRef, useState, useEffect, useMemo } from "react";
-import { Canvas, useFrame } from "@react-three/fiber";
-import { OrbitControls } from "@react-three/drei";
-import { EffectComposer, Bloom } from "@react-three/postprocessing";
-import * as THREE from "three";
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WebGL Audio Beat Visualizer</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
 
-function VisualizerMesh({ analyser, dataArray, isPlaying }) {
-  const group = useRef();
-  const sphere = useRef();
-  const rings = useRef([]);
-  const particles = useRef();
+    body {
+      margin: 0;
+      overflow: hidden;
+      font-family: Arial, Helvetica, sans-serif;
+      background: #050505;
+      color: white;
+    }
 
-  const particleCount = 900;
-  const particlePositions = useMemo(() => {
-    const arr = new Float32Array(particleCount * 3);
+    canvas {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      display: block;
+    }
+
+    .overlay {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background:
+        radial-gradient(circle at center, rgba(124, 58, 237, 0.28), rgba(0, 0, 0, 0) 45%),
+        linear-gradient(to bottom, rgba(15, 23, 42, 0.35), rgba(0, 0, 0, 0.95));
+      z-index: 1;
+    }
+
+    .ui {
+      position: fixed;
+      left: 28px;
+      right: 28px;
+      bottom: 28px;
+      z-index: 2;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      max-width: 720px;
+    }
+
+    .title {
+      max-width: 720px;
+    }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      font-size: 12px;
+      letter-spacing: 0.32em;
+      text-transform: uppercase;
+      color: rgba(165, 243, 252, 0.75);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(42px, 7vw, 88px);
+      line-height: 0.95;
+      letter-spacing: -0.06em;
+    }
+
+    .panel {
+      width: 100%;
+      padding: 18px;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 24px;
+      background: rgba(0, 0, 0, 0.45);
+      backdrop-filter: blur(18px);
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+    }
+
+    .track-label {
+      margin: 0 0 4px;
+      font-size: 11px;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: rgba(255, 255, 255, 0.5);
+    }
+
+    .track-name {
+      margin: 0 0 16px;
+      font-size: 18px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+
+    button,
+    label.upload {
+      appearance: none;
+      border: 0;
+      border-radius: 999px;
+      padding: 12px 18px;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 0.2s ease, opacity 0.2s ease, background 0.2s ease;
+    }
+
+    label.upload {
+      background: white;
+      color: #09090b;
+    }
+
+    button {
+      background: rgba(255, 255, 255, 0.12);
+      color: white;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+    }
+
+    button:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+    }
+
+    button:hover:not(:disabled),
+    label.upload:hover {
+      transform: translateY(-1px) scale(1.02);
+    }
+
+    input[type="file"] {
+      display: none;
+    }
+
+    audio {
+      width: 100%;
+      margin-top: 14px;
+      opacity: 0.82;
+    }
+
+    @media (max-width: 640px) {
+      .ui {
+        left: 16px;
+        right: 16px;
+        bottom: 16px;
+      }
+
+      .panel {
+        border-radius: 20px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="visualizer"></canvas>
+  <div class="overlay"></div>
+
+  <main class="ui">
+    <section class="title">
+      <p class="eyebrow">WebGL Audio Visualizer</p>
+      <h1>Upload a song.<br />Let the beat draw light.</h1>
+    </section>
+
+    <section class="panel">
+      <p class="track-label">Current Track</p>
+      <p id="trackName" class="track-name">No track loaded</p>
+
+      <div class="controls">
+        <label class="upload">
+          Upload music
+          <input id="fileInput" type="file" accept="audio/*" />
+        </label>
+        <button id="playButton" disabled>Play</button>
+      </div>
+
+      <audio id="audio" controls></audio>
+    </section>
+  </main>
+
+  <script type="module">
+    import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
+
+    const canvas = document.getElementById("visualizer");
+    const fileInput = document.getElementById("fileInput");
+    const playButton = document.getElementById("playButton");
+    const trackName = document.getElementById("trackName");
+    const audio = document.getElementById("audio");
+
+    let audioContext = null;
+    let analyser = null;
+    let source = null;
+    let dataArray = null;
+    let objectUrl = null;
+    let isPlaying = false;
+
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x050505, 0.045);
+
+    const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.z = 8;
+
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.45);
+    scene.add(ambientLight);
+
+    const pointLightA = new THREE.PointLight(0xa78bfa, 2.6, 20);
+    pointLightA.position.set(4, 4, 5);
+    scene.add(pointLightA);
+
+    const pointLightB = new THREE.PointLight(0x22d3ee, 1.8, 20);
+    pointLightB.position.set(-4, -3, -2);
+    scene.add(pointLightB);
+
+    const group = new THREE.Group();
+    scene.add(group);
+
+    const sphereGeometry = new THREE.IcosahedronGeometry(1.25, 5);
+    const sphereMaterial = new THREE.MeshStandardMaterial({
+      color: 0xa78bfa,
+      emissive: 0x7c3aed,
+      emissiveIntensity: 1,
+      roughness: 0.22,
+      metalness: 0.45,
+      transparent: true,
+      opacity: 0.86
+    });
+    const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
+    group.add(sphere);
+
+    const rings = [];
+    for (let i = 0; i < 14; i++) {
+      const geometry = new THREE.TorusGeometry(1.8 + i * 0.18, 0.008 + i * 0.0015, 8, 160);
+      const material = new THREE.MeshBasicMaterial({
+        color: i % 2 ? 0x22d3ee : 0xf472b6,
+        transparent: true,
+        opacity: 0.28
+      });
+      const ring = new THREE.Mesh(geometry, material);
+      ring.rotation.x = Math.PI / 2;
+      ring.rotation.z = (i * Math.PI) / 14;
+      group.add(ring);
+      rings.push(ring);
+    }
+
+    const particleCount = 900;
+    const particlePositions = new Float32Array(particleCount * 3);
+
     for (let i = 0; i < particleCount; i++) {
       const r = 3 + Math.random() * 6;
       const theta = Math.random() * Math.PI * 2;
       const phi = Math.acos(2 * Math.random() - 1);
-      arr[i * 3] = r * Math.sin(phi) * Math.cos(theta);
-      arr[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
-      arr[i * 3 + 2] = r * Math.cos(phi);
-    }
-    return arr;
-  }, []);
-
-  useFrame((state) => {
-    if (!analyser || !dataArray || !group.current) return;
-
-    analyser.getByteFrequencyData(dataArray);
-
-    const bass = average(dataArray, 0, 18) / 255;
-    const mid = average(dataArray, 18, 85) / 255;
-    const high = average(dataArray, 85, 180) / 255;
-    const energy = (bass * 1.5 + mid + high * 0.7) / 3.2;
-
-    const t = state.clock.elapsedTime;
-
-    group.current.rotation.y += 0.002 + energy * 0.015;
-    group.current.rotation.x = Math.sin(t * 0.35) * 0.08;
-
-    if (sphere.current) {
-      const pulse = 1 + bass * 0.8 + energy * 0.25;
-      sphere.current.scale.setScalar(THREE.MathUtils.lerp(sphere.current.scale.x, pulse, 0.18));
-      sphere.current.material.emissiveIntensity = 0.7 + bass * 3;
-      sphere.current.material.wireframe = high > 0.45;
+      particlePositions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+      particlePositions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+      particlePositions[i * 3 + 2] = r * Math.cos(phi);
     }
 
-    rings.current.forEach((ring, i) => {
-      if (!ring) return;
-      const bandValue = dataArray[i * 12] / 255 || 0;
-      const target = 1 + bandValue * 1.8 + bass * 0.5;
-      ring.scale.setScalar(THREE.MathUtils.lerp(ring.scale.x, target, 0.12));
-      ring.rotation.z += 0.003 + bandValue * 0.03;
-      ring.material.opacity = 0.22 + bandValue * 0.65;
+    const particleGeometry = new THREE.BufferGeometry();
+    particleGeometry.setAttribute("position", new THREE.BufferAttribute(particlePositions, 3));
+
+    const particleMaterial = new THREE.PointsMaterial({
+      color: 0xffffff,
+      size: 0.035,
+      transparent: true,
+      opacity: 0.65
     });
 
-    if (particles.current) {
-      particles.current.rotation.y -= 0.001 + high * 0.01;
-      particles.current.material.size = 0.02 + energy * 0.06;
-    }
-  });
+    const particles = new THREE.Points(particleGeometry, particleMaterial);
+    group.add(particles);
 
-  return (
-    <group ref={group}>
-      <mesh ref={sphere}>
-        <icosahedronGeometry args={[1.25, 5]} />
-        <meshStandardMaterial
-          color="#a78bfa"
-          emissive="#7c3aed"
-          roughness={0.22}
-          metalness={0.45}
-          transparent
-          opacity={isPlaying ? 0.92 : 0.45}
-        />
-      </mesh>
-
-      {[...Array(14)].map((_, i) => (
-        <mesh
-          key={i}
-          ref={(el) => (rings.current[i] = el)}
-          rotation={[Math.PI / 2, 0, (i * Math.PI) / 14]}
-        >
-          <torusGeometry args={[1.8 + i * 0.18, 0.008 + i * 0.0015, 8, 160]} />
-          <meshBasicMaterial color={i % 2 ? "#22d3ee" : "#f472b6"} transparent opacity={0.28} />
-        </mesh>
-      ))}
-
-      <points ref={particles}>
-        <bufferGeometry>
-          <bufferAttribute
-            attach="attributes-position"
-            count={particleCount}
-            array={particlePositions}
-            itemSize={3}
-          />
-        </bufferGeometry>
-        <pointsMaterial color="#ffffff" size={0.035} transparent opacity={0.65} />
-      </points>
-    </group>
-  );
-}
-
-function average(arr, start, end) {
-  let sum = 0;
-  let count = 0;
-  for (let i = start; i < end && i < arr.length; i++) {
-    sum += arr[i];
-    count++;
-  }
-  return count ? sum / count : 0;
-}
-
-export default function WebGLAudioBeatVisualizer() {
-  const audioRef = useRef(null);
-  const audioContextRef = useRef(null);
-  const sourceRef = useRef(null);
-  const analyserRef = useRef(null);
-  const dataArrayRef = useRef(null);
-  const objectUrlRef = useRef(null);
-
-  const [trackName, setTrackName] = useState("No track loaded");
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [ready, setReady] = useState(false);
-  const [audioData, setAudioData] = useState({ analyser: null, dataArray: null });
-
-  useEffect(() => {
-    return () => {
-      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
-      if (audioContextRef.current) audioContextRef.current.close();
-    };
-  }, []);
-
-  const setupAudioGraph = async () => {
-    if (!audioRef.current) return;
-
-    if (!audioContextRef.current) {
-      const AudioContext = window.AudioContext || window.webkitAudioContext;
-      audioContextRef.current = new AudioContext();
-
-      analyserRef.current = audioContextRef.current.createAnalyser();
-      analyserRef.current.fftSize = 512;
-      analyserRef.current.smoothingTimeConstant = 0.82;
-
-      sourceRef.current = audioContextRef.current.createMediaElementSource(audioRef.current);
-      sourceRef.current.connect(analyserRef.current);
-      analyserRef.current.connect(audioContextRef.current.destination);
-
-      dataArrayRef.current = new Uint8Array(analyserRef.current.frequencyBinCount);
-      setAudioData({ analyser: analyserRef.current, dataArray: dataArrayRef.current });
+    function average(arr, start, end) {
+      if (!arr) return 0;
+      let sum = 0;
+      let count = 0;
+      for (let i = start; i < end && i < arr.length; i++) {
+        sum += arr[i];
+        count++;
+      }
+      return count ? sum / count : 0;
     }
 
-    if (audioContextRef.current.state === "suspended") {
-      await audioContextRef.current.resume();
+    async function setupAudioGraph() {
+      if (!audioContext) {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        audioContext = new AudioContextClass();
+
+        analyser = audioContext.createAnalyser();
+        analyser.fftSize = 512;
+        analyser.smoothingTimeConstant = 0.82;
+
+        source = audioContext.createMediaElementSource(audio);
+        source.connect(analyser);
+        analyser.connect(audioContext.destination);
+
+        dataArray = new Uint8Array(analyser.frequencyBinCount);
+      }
+
+      if (audioContext.state === "suspended") {
+        await audioContext.resume();
+      }
     }
-  };
 
-  const handleUpload = async (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
+    fileInput.addEventListener("change", () => {
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) return;
 
-    if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
-    const url = URL.createObjectURL(file);
-    objectUrlRef.current = url;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      objectUrl = URL.createObjectURL(file);
 
-    setTrackName(file.name);
-    setReady(true);
-    setIsPlaying(false);
+      audio.src = objectUrl;
+      audio.load();
+      trackName.textContent = file.name;
+      playButton.disabled = false;
+      playButton.textContent = "Play";
+      isPlaying = false;
+    });
 
-    if (audioRef.current) {
-      audioRef.current.src = url;
-      audioRef.current.load();
+    playButton.addEventListener("click", async () => {
+      if (!audio.src) return;
+
+      await setupAudioGraph();
+
+      if (audio.paused) {
+        await audio.play();
+        isPlaying = true;
+        playButton.textContent = "Pause";
+      } else {
+        audio.pause();
+        isPlaying = false;
+        playButton.textContent = "Play";
+      }
+    });
+
+    audio.addEventListener("ended", () => {
+      isPlaying = false;
+      playButton.textContent = "Play";
+    });
+
+    function animate(time) {
+      requestAnimationFrame(animate);
+
+      let bass = 0;
+      let mid = 0;
+      let high = 0;
+      let energy = 0;
+
+      if (analyser && dataArray) {
+        analyser.getByteFrequencyData(dataArray);
+        bass = average(dataArray, 0, 18) / 255;
+        mid = average(dataArray, 18, 85) / 255;
+        high = average(dataArray, 85, 180) / 255;
+        energy = (bass * 1.5 + mid + high * 0.7) / 3.2;
+      }
+
+      const t = time * 0.001;
+
+      group.rotation.y += 0.002 + energy * 0.018;
+      group.rotation.x = Math.sin(t * 0.35) * 0.08;
+
+      const pulse = 1 + bass * 0.85 + energy * 0.25;
+      sphere.scale.lerp(new THREE.Vector3(pulse, pulse, pulse), 0.18);
+      sphere.material.emissiveIntensity = 0.8 + bass * 3;
+      sphere.material.opacity = isPlaying ? 0.92 : 0.48;
+      sphere.material.wireframe = high > 0.45;
+
+      rings.forEach((ring, i) => {
+        const bandValue = dataArray ? (dataArray[i * 12] || 0) / 255 : 0;
+        const target = 1 + bandValue * 1.8 + bass * 0.5;
+        ring.scale.lerp(new THREE.Vector3(target, target, target), 0.12);
+        ring.rotation.z += 0.003 + bandValue * 0.03;
+        ring.material.opacity = 0.22 + bandValue * 0.65;
+      });
+
+      particles.rotation.y -= 0.001 + high * 0.01;
+      particles.rotation.x += 0.0005;
+      particles.material.size = 0.02 + energy * 0.06;
+
+      camera.position.x = Math.sin(t * 0.18) * 0.35;
+      camera.position.y = Math.cos(t * 0.14) * 0.25;
+      camera.lookAt(0, 0, 0);
+
+      renderer.render(scene, camera);
     }
-  };
 
-  const togglePlay = async () => {
-    if (!audioRef.current || !ready) return;
-    await setupAudioGraph();
+    animate(0);
 
-    if (audioRef.current.paused) {
-      await audioRef.current.play();
-      setIsPlaying(true);
-    } else {
-      audioRef.current.pause();
-      setIsPlaying(false);
-    }
-  };
-
-  return (
-    <div className="relative min-h-screen overflow-hidden bg-zinc-950 text-white">
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(124,58,237,0.28),rgba(0,0,0,0)_45%),linear-gradient(to_bottom,rgba(15,23,42,0.5),rgba(0,0,0,1))]" />
-
-      <div className="absolute inset-0">
-        <Canvas camera={{ position: [0, 0, 8], fov: 50 }}>
-          <ambientLight intensity={0.28} />
-          <pointLight position={[3, 4, 5]} intensity={2.2} />
-          <pointLight position={[-4, -2, -3]} intensity={1.1} color="#22d3ee" />
-
-          <VisualizerMesh
-            analyser={audioData.analyser}
-            dataArray={audioData.dataArray}
-            isPlaying={isPlaying}
-          />
-
-          <OrbitControls enableZoom={false} enablePan={false} autoRotate={!isPlaying} autoRotateSpeed={0.5} />
-          <EffectComposer>
-            <Bloom intensity={1.2} luminanceThreshold={0.15} luminanceSmoothing={0.85} />
-          </EffectComposer>
-        </Canvas>
-      </div>
-
-      <div className="relative z-10 flex min-h-screen flex-col justify-between p-6 md:p-10">
-        <header className="max-w-2xl">
-          <p className="mb-3 text-sm uppercase tracking-[0.35em] text-cyan-200/70">WebGL Audio Visualizer</p>
-          <h1 className="text-4xl font-semibold tracking-tight md:text-6xl">
-            Upload a song.<br />Let the beat draw light.
-          </h1>
-          <p className="mt-5 max-w-xl text-base leading-relaxed text-zinc-300 md:text-lg">
-            A browser-based WebGL visualizer using Three.js, React Three Fiber, and the Web Audio API.
-            Bass, mids, and highs drive pulse, rotation, particles, and ring expansion in real time.
-          </p>
-        </header>
-
-        <section className="w-full max-w-2xl rounded-3xl border border-white/10 bg-black/45 p-4 shadow-2xl backdrop-blur-xl md:p-5">
-          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <div>
-              <p className="text-xs uppercase tracking-[0.25em] text-zinc-400">Current Track</p>
-              <p className="mt-1 max-w-md truncate text-lg font-medium">{trackName}</p>
-            </div>
-
-            <div className="flex flex-wrap gap-3">
-              <label className="cursor-pointer rounded-2xl bg-white px-5 py-3 text-sm font-semibold text-zinc-950 transition hover:scale-[1.03]">
-                Upload music
-                <input type="file" accept="audio/*" onChange={handleUpload} className="hidden" />
-              </label>
-
-              <button
-                onClick={togglePlay}
-                disabled={!ready}
-                className="rounded-2xl border border-white/15 bg-white/10 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                {isPlaying ? "Pause" : "Play"}
-              </button>
-            </div>
-          </div>
-
-          <audio
-            ref={audioRef}
-            onEnded={() => setIsPlaying(false)}
-            controls
-            className="mt-4 w-full opacity-80"
-          />
-        </section>
-      </div>
-    </div>
-  );
-}
+    window.addEventListener("resize", () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    });
+  </script>
+</body>
+</html>
