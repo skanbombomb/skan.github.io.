@@ -5,14 +5,19 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>WebGL Audio Motion Image</title>
   <style>
-    * { box-sizing: border-box; }
+    * {
+      box-sizing: border-box;
+    }
 
+    html,
     body {
       margin: 0;
+      width: 100%;
+      height: 100%;
       overflow: hidden;
-      font-family: Arial, Helvetica, sans-serif;
       background: #050505;
       color: white;
+      font-family: Arial, Helvetica, sans-serif;
     }
 
     canvas {
@@ -26,16 +31,15 @@
     .ui {
       position: fixed;
       left: 24px;
-      right: 24px;
       bottom: 24px;
       z-index: 10;
-      max-width: 560px;
+      width: min(560px, calc(100vw - 48px));
       padding: 18px;
       border-radius: 24px;
-      border: 1px solid rgba(255,255,255,0.14);
-      background: rgba(0,0,0,0.48);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      background: rgba(0, 0, 0, 0.52);
       backdrop-filter: blur(18px);
-      box-shadow: 0 20px 70px rgba(0,0,0,0.45);
+      box-shadow: 0 20px 70px rgba(0, 0, 0, 0.48);
     }
 
     .eyebrow {
@@ -43,14 +47,14 @@
       font-size: 11px;
       letter-spacing: 0.28em;
       text-transform: uppercase;
-      color: rgba(165, 243, 252, 0.8);
+      color: rgba(165, 243, 252, 0.82);
     }
 
     h1 {
       margin: 0 0 14px;
-      font-size: clamp(28px, 5vw, 54px);
+      font-size: clamp(28px, 5vw, 52px);
       line-height: 0.95;
-      letter-spacing: -0.05em;
+      letter-spacing: -0.055em;
     }
 
     .track-label {
@@ -58,7 +62,7 @@
       font-size: 11px;
       letter-spacing: 0.22em;
       text-transform: uppercase;
-      color: rgba(255,255,255,0.48);
+      color: rgba(255, 255, 255, 0.48);
     }
 
     .track-name {
@@ -94,8 +98,8 @@
     }
 
     button {
-      border: 1px solid rgba(255,255,255,0.14);
-      background: rgba(255,255,255,0.12);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      background: rgba(255, 255, 255, 0.12);
       color: white;
     }
 
@@ -109,7 +113,9 @@
       transform: translateY(-1px) scale(1.02);
     }
 
-    input[type="file"] { display: none; }
+    input[type="file"] {
+      display: none;
+    }
 
     audio {
       width: 100%;
@@ -124,26 +130,45 @@
       z-index: 11;
       padding: 10px 14px;
       border-radius: 999px;
-      background: rgba(0,0,0,0.42);
-      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(0, 0, 0, 0.46);
+      border: 1px solid rgba(255, 255, 255, 0.12);
       backdrop-filter: blur(14px);
       font-size: 12px;
-      color: rgba(255,255,255,0.75);
+      color: rgba(255, 255, 255, 0.75);
+    }
+
+    .loading {
+      position: fixed;
+      inset: 0;
+      z-index: 5;
+      display: grid;
+      place-items: center;
+      color: rgba(255, 255, 255, 0.75);
+      background: #050505;
+      transition: opacity 0.35s ease;
+      pointer-events: none;
+    }
+
+    .loading.hide {
+      opacity: 0;
     }
 
     @media (max-width: 720px) {
       .ui {
         left: 14px;
-        right: 14px;
         bottom: 14px;
-        max-width: none;
+        width: calc(100vw - 28px);
       }
-      .hint { display: none; }
+
+      .hint {
+        display: none;
+      }
     }
   </style>
 </head>
 <body>
   <canvas id="visualizer"></canvas>
+  <div id="loading" class="loading">Loading 01.png...</div>
 
   <main class="ui">
     <p class="eyebrow">WebGL Motion Graphic</p>
@@ -158,12 +183,13 @@
         <input id="fileInput" type="file" accept="audio/*" />
       </label>
       <button id="playButton" disabled>Play</button>
+      <button id="demoButton">Demo Motion</button>
     </div>
 
     <audio id="audio" controls></audio>
   </main>
 
-  <div class="hint">Image source: 01.png / Bass = zoom / High = sparkle</div>
+  <div class="hint">Image: 01.png / Bass = zoom / Treble = sparkle</div>
 
   <script type="module">
     import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
@@ -171,8 +197,10 @@
     const IMAGE_PATH = "./01.png";
 
     const canvas = document.getElementById("visualizer");
+    const loading = document.getElementById("loading");
     const fileInput = document.getElementById("fileInput");
     const playButton = document.getElementById("playButton");
+    const demoButton = document.getElementById("demoButton");
     const trackName = document.getElementById("trackName");
     const audio = document.getElementById("audio");
 
@@ -182,12 +210,18 @@
     let dataArray = null;
     let objectUrl = null;
     let isPlaying = false;
+    let demoMode = false;
+    let imageReady = false;
 
     const scene = new THREE.Scene();
     const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
     camera.position.z = 10;
 
-    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+    const renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: true,
+      alpha: false
+    });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
@@ -195,31 +229,68 @@
     scene.add(mainGroup);
 
     const textureLoader = new THREE.TextureLoader();
-    const imageTexture = textureLoader.load(IMAGE_PATH);
+    const imageTexture = textureLoader.load(
+      IMAGE_PATH,
+      () => {
+        imageReady = true;
+        resizeImageToCover();
+        loading.classList.add("hide");
+      },
+      undefined,
+      () => {
+        loading.textContent = "Cannot load 01.png. Put 01.png beside index.html.";
+      }
+    );
     imageTexture.colorSpace = THREE.SRGBColorSpace;
 
-    const imageMaterial = new THREE.MeshBasicMaterial({ map: imageTexture });
-    const imagePlane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1, 80, 80), imageMaterial);
+    const imageMaterial = new THREE.MeshBasicMaterial({
+      map: imageTexture
+    });
+
+    const imagePlane = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1, 96, 96),
+      imageMaterial
+    );
+    imagePlane.position.z = 0;
     mainGroup.add(imagePlane);
 
     const glowMaterial = new THREE.MeshBasicMaterial({
       color: 0xff5eea,
       transparent: true,
-      opacity: 0.0,
-      blending: THREE.AdditiveBlending
+      opacity: 0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false
     });
-    const glowPlane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), glowMaterial);
+
+    const glowPlane = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      glowMaterial
+    );
     glowPlane.position.z = 0.03;
     mainGroup.add(glowPlane);
+
+    const vignetteMaterial = new THREE.MeshBasicMaterial({
+      color: 0x000000,
+      transparent: true,
+      opacity: 0.18,
+      depthWrite: false
+    });
+
+    const vignettePlane = new THREE.Mesh(
+      new THREE.PlaneGeometry(2.2, 2.2),
+      vignetteMaterial
+    );
+    vignettePlane.position.z = 0.06;
+    scene.add(vignettePlane);
 
     const scanlineCanvas = document.createElement("canvas");
     scanlineCanvas.width = 32;
     scanlineCanvas.height = 32;
     const scanCtx = scanlineCanvas.getContext("2d");
-    scanCtx.fillStyle = "rgba(255,255,255,0.0)";
-    scanCtx.fillRect(0, 0, 32, 32);
+    scanCtx.clearRect(0, 0, 32, 32);
     scanCtx.fillStyle = "rgba(255,255,255,0.08)";
     scanCtx.fillRect(0, 0, 32, 1);
+
     const scanTexture = new THREE.CanvasTexture(scanlineCanvas);
     scanTexture.wrapS = THREE.RepeatWrapping;
     scanTexture.wrapT = THREE.RepeatWrapping;
@@ -228,22 +299,27 @@
     const scanMaterial = new THREE.MeshBasicMaterial({
       map: scanTexture,
       transparent: true,
-      opacity: 0.16,
-      blending: THREE.AdditiveBlending
+      opacity: 0.12,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false
     });
-    const scanPlane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), scanMaterial);
+
+    const scanPlane = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      scanMaterial
+    );
     scanPlane.position.z = 0.04;
     mainGroup.add(scanPlane);
 
-    const particleCount = 420;
+    const particleCount = 520;
     const particlePositions = new Float32Array(particleCount * 3);
-    const particleSpeeds = [];
+    const particleSpeeds = new Float32Array(particleCount);
 
     for (let i = 0; i < particleCount; i++) {
-      particlePositions[i * 3] = (Math.random() - 0.5) * 2;
-      particlePositions[i * 3 + 1] = (Math.random() - 0.5) * 2;
-      particlePositions[i * 3 + 2] = 0.08;
-      particleSpeeds.push(0.15 + Math.random() * 0.5);
+      particlePositions[i * 3] = (Math.random() - 0.5) * 2.1;
+      particlePositions[i * 3 + 1] = (Math.random() - 0.5) * 2.1;
+      particlePositions[i * 3 + 2] = 0.12;
+      particleSpeeds[i] = 0.18 + Math.random() * 0.65;
     }
 
     const particleGeometry = new THREE.BufferGeometry();
@@ -251,10 +327,11 @@
 
     const particleMaterial = new THREE.PointsMaterial({
       color: 0x9be7ff,
-      size: 0.012,
+      size: 0.01,
       transparent: true,
-      opacity: 0.45,
-      blending: THREE.AdditiveBlending
+      opacity: 0.42,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false
     });
 
     const particles = new THREE.Points(particleGeometry, particleMaterial);
@@ -264,17 +341,18 @@
     scene.add(equalizerGroup);
 
     const bars = [];
-    const barCount = 42;
+    const barCount = 44;
+
     for (let i = 0; i < barCount; i++) {
-      const bar = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.018, 0.12),
-        new THREE.MeshBasicMaterial({
-          color: i % 3 === 0 ? 0xff5eea : i % 3 === 1 ? 0x22d3ee : 0xffd166,
-          transparent: true,
-          opacity: 0.72,
-          blending: THREE.AdditiveBlending
-        })
-      );
+      const barMaterial = new THREE.MeshBasicMaterial({
+        color: i % 3 === 0 ? 0xff5eea : i % 3 === 1 ? 0x22d3ee : 0xffd166,
+        transparent: true,
+        opacity: 0.7,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+      });
+
+      const bar = new THREE.Mesh(new THREE.PlaneGeometry(0.018, 0.12), barMaterial);
       bars.push(bar);
       equalizerGroup.add(bar);
     }
@@ -283,10 +361,13 @@
       const vw = window.innerWidth;
       const vh = window.innerHeight;
       const viewAspect = vw / vh;
-      const imgAspect = imageTexture.image ? imageTexture.image.width / imageTexture.image.height : 1;
+      const imgAspect = imageTexture.image
+        ? imageTexture.image.width / imageTexture.image.height
+        : 1;
 
       let w;
       let h;
+
       if (viewAspect > imgAspect) {
         w = 2;
         h = 2 * viewAspect / imgAspect;
@@ -300,24 +381,22 @@
       scanPlane.scale.set(w, h, 1);
 
       equalizerGroup.position.set(0, -0.82, 0.2);
-      equalizerGroup.scale.set(1, 1, 1);
       bars.forEach((bar, i) => {
         const x = -0.9 + (i / (barCount - 1)) * 1.8;
         bar.position.set(x, 0, 0.2);
       });
     }
 
-    imageTexture.onload = resizeImageToCover;
-    setTimeout(resizeImageToCover, 300);
-
     function average(arr, start, end) {
       if (!arr) return 0;
       let sum = 0;
       let count = 0;
+
       for (let i = start; i < end && i < arr.length; i++) {
         sum += arr[i];
         count++;
       }
+
       return count ? sum / count : 0;
     }
 
@@ -349,26 +428,47 @@
       if (objectUrl) URL.revokeObjectURL(objectUrl);
       objectUrl = URL.createObjectURL(file);
 
+      demoMode = false;
+      isPlaying = false;
       audio.src = objectUrl;
       audio.load();
+
       trackName.textContent = file.name;
       playButton.disabled = false;
       playButton.textContent = "Play";
-      isPlaying = false;
+      demoButton.textContent = "Demo Motion";
     });
 
     playButton.addEventListener("click", async () => {
       if (!audio.src) return;
+
+      demoMode = false;
       await setupAudioGraph();
 
       if (audio.paused) {
         await audio.play();
         isPlaying = true;
         playButton.textContent = "Pause";
+        demoButton.textContent = "Demo Motion";
       } else {
         audio.pause();
         isPlaying = false;
         playButton.textContent = "Play";
+      }
+    });
+
+    demoButton.addEventListener("click", () => {
+      demoMode = !demoMode;
+      isPlaying = demoMode;
+
+      if (demoMode) {
+        if (!audio.paused) audio.pause();
+        playButton.textContent = "Play";
+        demoButton.textContent = "Stop Demo";
+        trackName.textContent = "Demo motion preview";
+      } else {
+        demoButton.textContent = "Demo Motion";
+        if (!audio.src) trackName.textContent = "No track loaded";
       }
     });
 
@@ -377,69 +477,84 @@
       playButton.textContent = "Play";
     });
 
-    function animate(time) {
-      requestAnimationFrame(animate);
-
+    function getAudioEnergy(time) {
       let bass = 0;
       let mid = 0;
       let high = 0;
       let energy = 0;
 
-      if (analyser && dataArray) {
+      if (demoMode) {
+        bass = 0.42 + Math.max(0, Math.sin(time * 4.2)) * 0.58;
+        mid = 0.32 + Math.max(0, Math.sin(time * 2.7 + 1.4)) * 0.48;
+        high = 0.2 + Math.max(0, Math.sin(time * 8.5 + 0.6)) * 0.62;
+      } else if (analyser && dataArray) {
         analyser.getByteFrequencyData(dataArray);
         bass = average(dataArray, 0, 18) / 255;
         mid = average(dataArray, 18, 95) / 255;
         high = average(dataArray, 95, 180) / 255;
-        energy = (bass * 1.5 + mid + high * 0.8) / 3.3;
       }
 
-      const t = time * 0.001;
-      const idle = isPlaying ? 1 : 0.25;
+      energy = (bass * 1.5 + mid + high * 0.8) / 3.3;
+      return { bass, mid, high, energy };
+    }
 
-      const zoom = 1 + bass * 0.035 * idle + energy * 0.018 * idle;
+    function animate(timeMs) {
+      requestAnimationFrame(animate);
+
+      const t = timeMs * 0.001;
+      const { bass, mid, high, energy } = getAudioEnergy(t);
+      const active = isPlaying || demoMode;
+      const activeAmount = active ? 1 : 0.18;
+
+      const zoom = 1 + bass * 0.04 * activeAmount + energy * 0.018 * activeAmount;
       mainGroup.scale.set(zoom, zoom, 1);
-      mainGroup.rotation.z = Math.sin(t * 1.2) * 0.006 * idle + mid * 0.012 * idle;
-      mainGroup.position.x = Math.sin(t * 1.8) * 0.012 * energy * idle;
-      mainGroup.position.y = Math.cos(t * 1.5) * 0.01 * energy * idle;
+      mainGroup.rotation.z = Math.sin(t * 1.2) * 0.006 * activeAmount + mid * 0.012 * activeAmount;
+      mainGroup.position.x = Math.sin(t * 1.8) * 0.012 * energy * activeAmount;
+      mainGroup.position.y = Math.cos(t * 1.5) * 0.01 * energy * activeAmount;
 
-      glowMaterial.opacity = 0.035 + bass * 0.18 + high * 0.08;
+      glowMaterial.opacity = 0.02 + bass * 0.18 * activeAmount + high * 0.08 * activeAmount;
       glowMaterial.color.setHSL((0.82 + high * 0.22 + t * 0.03) % 1, 0.9, 0.62);
 
-      scanTexture.offset.y -= 0.002 + high * 0.018;
-      scanMaterial.opacity = 0.08 + high * 0.22;
+      scanTexture.offset.y -= 0.002 + high * 0.018 * activeAmount;
+      scanMaterial.opacity = 0.06 + high * 0.2 * activeAmount;
 
       const positions = particles.geometry.attributes.position.array;
       for (let i = 0; i < particleCount; i++) {
         const index = i * 3;
-        positions[index + 1] += particleSpeeds[i] * (0.001 + high * 0.006);
-        positions[index] += Math.sin(t * 2 + i) * 0.0005 * (1 + energy * 8);
+        positions[index + 1] += particleSpeeds[i] * (0.0007 + high * 0.006 * activeAmount);
+        positions[index] += Math.sin(t * 2 + i) * 0.00045 * (1 + energy * 8 * activeAmount);
 
         if (positions[index + 1] > 1.1) {
           positions[index + 1] = -1.1;
-          positions[index] = (Math.random() - 0.5) * 2;
+          positions[index] = (Math.random() - 0.5) * 2.1;
         }
       }
       particles.geometry.attributes.position.needsUpdate = true;
-      particles.material.size = 0.007 + high * 0.025 + bass * 0.01;
-      particles.material.opacity = 0.2 + energy * 0.75;
+      particleMaterial.size = 0.006 + high * 0.026 * activeAmount + bass * 0.01 * activeAmount;
+      particleMaterial.opacity = 0.16 + energy * 0.72 * activeAmount;
 
       bars.forEach((bar, i) => {
-        const value = dataArray ? (dataArray[Math.floor(i * 4.5)] || 0) / 255 : 0;
-        const h = 0.05 + value * 0.32 + bass * 0.08;
+        const value = demoMode
+          ? Math.max(0.05, Math.sin(t * 4 + i * 0.35) * 0.5 + 0.5) * energy
+          : dataArray
+            ? (dataArray[Math.floor(i * 4.5)] || 0) / 255
+            : 0;
+
+        const h = 0.05 + value * 0.32 * activeAmount + bass * 0.08 * activeAmount;
         bar.scale.y = h * 6;
         bar.position.y = h * 0.42;
-        bar.material.opacity = 0.25 + value * 0.75;
+        bar.material.opacity = 0.16 + value * 0.8 * activeAmount;
       });
 
       renderer.render(scene, camera);
     }
 
-    animate(0);
+    requestAnimationFrame(animate);
 
     window.addEventListener("resize", () => {
       renderer.setSize(window.innerWidth, window.innerHeight);
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-      resizeImageToCover();
+      if (imageReady) resizeImageToCover();
     });
   </script>
 </body>
